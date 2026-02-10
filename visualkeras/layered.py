@@ -651,6 +651,8 @@ def layered_view(model,
                 
                 # Calculate positions
                 dims_x = int(box.x2 + box.de + spacing // 3 - text_vspacing * 2)
+                if is_last_layer:
+                    dims_x = int(max(dims_x, box.x2 + box.de + text_vspacing))
                 
                 # Default placement (will be overridden by line-based placement below)
                 dims_y = int(box.y1 + (box.y2 - box.y1) * 0.1)
@@ -684,6 +686,8 @@ def layered_view(model,
                         extra_clearance = text_vspacing
                         top_line_y = min(line_ys)
                         dims_y = int(top_line_y - rotated_dims.height - extra_clearance)
+                        if is_last_layer:
+                            dims_y = int(top_line_y - rotated_dims.height - text_vspacing)
                 
                 # Channels: below the box, horizontally centered
                 channels_x = int(box.x1 + (box.x2 - box.x1) / 2 - channels_width / 2)
