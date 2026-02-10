@@ -478,9 +478,11 @@ def layered_view(model,
     is_any_text_below = False
     max_box_with_text_height=0
     max_box_height = 0
+    extra_top_padding = 0
     if text_callable is not None:
         if font is None:
             font = ImageFont.load_default()
+        extra_top_padding = max(40, text_vspacing * 6)
         i = -1
         for index, layer in enumerate(model.layers):
             if type(layer) in type_ignore or type(layer) == SpacingDummyLayer or index in index_ignore:
@@ -510,11 +512,11 @@ def layered_view(model,
     if is_any_text_above:
         img_height += abs(max_box_height - max_box_with_text_height)*2
     
-    img = Image.new('RGBA', (int(ceil(img_width)), int(ceil(img_height))), background_fill)
+    img = Image.new('RGBA', (int(ceil(img_width)), int(ceil(img_height + extra_top_padding))), background_fill)
 
     # x, y correction (centering)
     for i, node in enumerate(boxes):
-        y_off = (img.height - layer_y[i]) / 2
+        y_off = (img.height - layer_y[i]) / 2 + extra_top_padding
         node.y1 += y_off
         node.y2 += y_off
 
@@ -525,10 +527,10 @@ def layered_view(model,
     
     if is_any_text_above:
         img_height -= abs(max_box_height - max_box_with_text_height)
-        img = Image.new('RGBA', (int(ceil(img_width)), int(ceil(img_height))), background_fill)
+        img = Image.new('RGBA', (int(ceil(img_width)), int(ceil(img_height + extra_top_padding))), background_fill)
     if is_any_text_below:
         img_height += abs(max_box_height - max_box_with_text_height) + padding
-        img = Image.new('RGBA', (int(ceil(img_width)), int(ceil(img_height))), background_fill)
+        img = Image.new('RGBA', (int(ceil(img_width)), int(ceil(img_height + extra_top_padding))), background_fill)
     
     draw = aggdraw.Draw(img)
 
@@ -603,10 +605,12 @@ def layered_view(model,
         
         # Count total number of layers with text
         total_text_layers = 0
+        filtered_layers = []
         for index, layer in enumerate(model.layers):
             if type(layer) in type_ignore or type(layer) == SpacingDummyLayer or index in index_ignore:
                 continue
             total_text_layers += 1
+            filtered_layers.append(layer)
         
         for index, layer in enumerate(model.layers):
             if type(layer) in type_ignore or type(layer) == SpacingDummyLayer or index in index_ignore:
@@ -646,18 +650,50 @@ def layered_view(model,
                 rotated_dims = temp_img.rotate(90, expand=True)
                 
                 # Calculate positions
-                dims_x = int(box.x2 + box.de + spacing // 3)
+                dims_x = int(box.x2 + box.de + spacing // 3 - text_vspacing * 2)
                 
-                # For the last layer, position it higher (10%)
-                # For all other layers, position lower (95%)
-                if is_last_layer:
-                    dims_y = int(box.y1 + (box.y2 - box.y1) * 0.1)  # 10% down
-                else:
-                    dims_y = int(box.y1 + (box.y2 - box.y1) * 0.95)  # 95% down
+                # Default placement (will be overridden by line-based placement below)
+                dims_y = int(box.y1 + (box.y2 - box.y1) * 0.1)
+
+                # Keep labels below the connecting lines to the previous/next box.
+                if not above:
+                    x_ref = dims_x + rotated_dims.width / 2
+                    line_ys = []
+
+                    def add_line_ys(from_box, to_box):
+                        points = [
+                            (from_box.x2 + from_box.de, from_box.y1 - from_box.de, to_box.x1 + to_box.de, to_box.y1 - to_box.de),
+                            (from_box.x2, from_box.y1, to_box.x1, to_box.y1),
+                            (from_box.x2 + from_box.de, from_box.y2 - from_box.de, to_box.x1 + to_box.de, to_box.y2 - to_box.de),
+                            (from_box.x2, from_box.y2, to_box.x1, to_box.y2),
+                        ]
+                        for x1, y1, x2, y2 in points:
+                            if x1 == x2:
+                                continue
+                            if x_ref < min(x1, x2) or x_ref > max(x1, x2):
+                                continue
+                            t = (x_ref - x1) / (x2 - x1)
+                            line_ys.append(y1 + t * (y2 - y1))
+
+                    if i > 0:
+                        add_line_ys(boxes[i - 1], box)
+                    if i + 1 < len(boxes):
+                        add_line_ys(box, boxes[i + 1])
+
+                    if line_ys:
+                        extra_clearance = text_vspacing
+                        top_line_y = min(line_ys)
+                        dims_y = int(top_line_y - rotated_dims.height - extra_clearance)
                 
                 # Channels: below the box, horizontally centered
                 channels_x = int(box.x1 + (box.x2 - box.x1) / 2 - channels_width / 2)
                 channels_y = int(box.y2 + text_vspacing)
+                # Keep channel labels fixed; move vertical dims up if they overlap.
+                dims_bottom = dims_y + rotated_dims.height
+                if dims_bottom >= channels_y:
+                    dims_y = int(channels_y - rotated_dims.height - text_vspacing)
+                if dims_y < 0:
+                    dims_y = 0
                 
                 if above:
                     # If text should be above, adjust accordingly
@@ -767,10 +803,10 @@ def layered_view(model,
             img_box.paste(img_text, mask=img_text)
             patches.append(img_box)
 
-        legend_image = linear_layout(patches, max_width=img.width, max_height=img.height, padding=10,
-                                     spacing=spacing,
-                                     background_fill=background_fill, horizontal=True)
-        img = vertical_image_concat(img, legend_image, background_fill=background_fill, spacing=5)
+        legend_image = linear_layout(patches, max_width=img.width, max_height=img.height, padding=0,
+                         spacing=spacing,
+                         background_fill=background_fill, horizontal=True)
+        img = vertical_image_concat(img, legend_image, background_fill=background_fill, spacing=-20)
 
     if to_file is not None:
         img.save(to_file)
