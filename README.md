@@ -46,6 +46,11 @@ pip install visualkeras
 ```
 To update visualkeras to the latest version, add the `--upgrade` flag to the above commands.
 
+If you want to install this fork directly from GitHub:
+```bash
+pip install git+https://github.com/anasvaf/visualkeras.git
+```
+
 If you want the latest (potentially unstable) features you can also directly install from the github master branch:
 ```bash
 pip install git+https://github.com/paulgavrikov/visualkeras

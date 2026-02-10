@@ -527,7 +527,7 @@ def layered_view(model,
         img_height -= abs(max_box_height - max_box_with_text_height)
         img = Image.new('RGBA', (int(ceil(img_width)), int(ceil(img_height))), background_fill)
     if is_any_text_below:
-        img_height += abs(max_box_height - max_box_with_text_height)
+        img_height += abs(max_box_height - max_box_with_text_height) + padding
         img = Image.new('RGBA', (int(ceil(img_width)), int(ceil(img_height))), background_fill)
     
     draw = aggdraw.Draw(img)
@@ -600,43 +600,109 @@ def layered_view(model,
     if text_callable is not None:
         draw_text = ImageDraw.Draw(img)
         i = -1
+        
+        # Count total number of layers with text
+        total_text_layers = 0
+        for index, layer in enumerate(model.layers):
+            if type(layer) in type_ignore or type(layer) == SpacingDummyLayer or index in index_ignore:
+                continue
+            total_text_layers += 1
+        
         for index, layer in enumerate(model.layers):
             if type(layer) in type_ignore or type(layer) == SpacingDummyLayer or index in index_ignore:
                 continue
             i += 1
             text, above = text_callable(i, layer)
-            text_height = 0
-            text_x_adjust = []
-            for line in text.split('\n'):
-                if hasattr(font, 'getsize'):
-                    line_height = font.getsize(line)[1]
-                else:
-                    line_height = font.getbbox(line)[3]
-                
-                text_height += line_height
-
-                if hasattr(font, 'getsize'):
-                    text_x_adjust.append(font.getsize(line)[0])
-                else:
-                    text_x_adjust.append(font.getbbox(line)[2])
-            text_height += (len(text.split('\n'))-1)*text_vspacing
-
-            box = boxes[i]
-            text_x = box.x1 + (box.x2 - box.x1) / 2
-            text_y = box.y2
-            if above:
-                text_x = box.x1 + box.de + (box.x2 - box.x1) / 2
-                text_y = box.y1 - box.de - text_height
+            text_lines = text.split('\n')
             
-            text_x -= max(text_x_adjust)/2  # Shift text to the left by half of the text width, so that it is centered
-            # Centering with middle text anchor 'm' does not work with align center
-            anchor = 'la'
-            if above:
+            box = boxes[i]
+            
+            # Check if this is the last layer with text
+            is_last_layer = (i == total_text_layers - 1)
+            
+            # Handle multi-line text with rotation for first line (dimensions)
+            if len(text_lines) >= 2:
+                # First line (dimensions) - rotated 90 degrees (vertical)
+                dims_text = text_lines[0]
+                # Second line (channels) - horizontal
+                channels_text = text_lines[1]
+                
+                # Create temporary image for rotated text
+                if hasattr(font, 'getbbox'):
+                    dims_bbox = font.getbbox(dims_text)
+                    dims_width = dims_bbox[2] - dims_bbox[0]
+                    dims_height = dims_bbox[3] - dims_bbox[1]
+                    channels_bbox = font.getbbox(channels_text)
+                    channels_width = channels_bbox[2] - channels_bbox[0]
+                    channels_height = channels_bbox[3] - channels_bbox[1]
+                else:
+                    dims_width, dims_height = font.getsize(dims_text)
+                    channels_width, channels_height = font.getsize(channels_text)
+                
+                # Create image for rotated dimensions text
+                temp_img = Image.new('RGBA', (dims_width + 20, dims_height + 20), (255, 255, 255, 0))
+                temp_draw = ImageDraw.Draw(temp_img)
+                temp_draw.text((10, 10), dims_text, font=font, fill=font_color)
+                rotated_dims = temp_img.rotate(90, expand=True)
+                
+                # Calculate positions
+                dims_x = int(box.x2 + box.de + spacing // 3)
+                
+                # For the last layer, position it higher (10%)
+                # For all other layers, position lower (95%)
+                if is_last_layer:
+                    dims_y = int(box.y1 + (box.y2 - box.y1) * 0.1)  # 10% down
+                else:
+                    dims_y = int(box.y1 + (box.y2 - box.y1) * 0.95)  # 95% down
+                
+                # Channels: below the box, horizontally centered
+                channels_x = int(box.x1 + (box.x2 - box.x1) / 2 - channels_width / 2)
+                channels_y = int(box.y2 + text_vspacing)
+                
+                if above:
+                    # If text should be above, adjust accordingly
+                    dims_y = int(box.y1 - box.de - rotated_dims.height - text_vspacing)
+                    channels_y = int(box.y1 - box.de - channels_height - text_vspacing)
+                
+                # Paste rotated dimensions
+                img.paste(rotated_dims, (dims_x, dims_y), rotated_dims)
+                
+                # Draw channels text
+                draw_text.text((channels_x, channels_y), channels_text, font=font, fill=font_color)
+                
+            else:
+                # Single line text - use original behavior
+                text_height = 0
+                text_x_adjust = []
+                for line in text_lines:
+                    if hasattr(font, 'getsize'):
+                        line_height = font.getsize(line)[1]
+                    else:
+                        line_height = font.getbbox(line)[3]
+                    
+                    text_height += line_height
+
+                    if hasattr(font, 'getsize'):
+                        text_x_adjust.append(font.getsize(line)[0])
+                    else:
+                        text_x_adjust.append(font.getbbox(line)[2])
+                text_height += (len(text_lines)-1)*text_vspacing
+
+                text_x = box.x1 + (box.x2 - box.x1) / 2
+                text_y = box.y2
+                if above:
+                    text_x = box.x1 + box.de + (box.x2 - box.x1) / 2
+                    text_y = box.y1 - box.de - text_height
+                
+                text_x -= max(text_x_adjust)/2  # Shift text to the left by half of the text width, so that it is centered
+                # Centering with middle text anchor 'm' does not work with align center
                 anchor = 'la'
-        
-            draw_text.multiline_text((text_x, text_y), text, font=font, fill=font_color,
-                                     anchor=anchor, align='center',
-                                     spacing=text_vspacing)
+                if above:
+                    anchor = 'la'
+            
+                draw_text.multiline_text((text_x, text_y), text, font=font, fill=font_color,
+                                         anchor=anchor, align='center',
+                                         spacing=text_vspacing)
 
     # Create layer color legend
     if legend:
@@ -701,10 +767,10 @@ def layered_view(model,
             img_box.paste(img_text, mask=img_text)
             patches.append(img_box)
 
-        legend_image = linear_layout(patches, max_width=img.width, max_height=img.height, padding=padding,
+        legend_image = linear_layout(patches, max_width=img.width, max_height=img.height, padding=10,
                                      spacing=spacing,
                                      background_fill=background_fill, horizontal=True)
-        img = vertical_image_concat(img, legend_image, background_fill=background_fill)
+        img = vertical_image_concat(img, legend_image, background_fill=background_fill, spacing=5)
 
     if to_file is not None:
         img.save(to_file)
